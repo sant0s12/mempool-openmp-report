@@ -84,7 +84,7 @@
 \graphicspath{{fig/}}
 
 % `xcolor` adds rich color support.
-\RequirePackage[usenames, dvipsnames, svgnames, table]{xcolor}
+\RequirePackage[dvipsnames, svgnames, table]{xcolor}
 
 % Customize chapter headings.
 \RequirePackage[Lenny]{fncychap}
@@ -124,7 +124,6 @@
 % Properly typeset quantities with SI units.
 \RequirePackage{siunitx}
 \sisetup{%
- binary-units,
  per-mode=symbol-or-fraction  % symbol for inline math, fraction for displayed math
 }
 

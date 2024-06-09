@@ -18,7 +18,7 @@ indent_size = 1
 indent_size = 2
 # LaTeX files should have one sentence per line.  Rationale: enable meaningful content change
 # tracking by VCS.
-max_line_length = 0
+max_line_length = 100
 
 [Makefile]
 indent_style = tab
