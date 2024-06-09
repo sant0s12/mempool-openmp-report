@@ -12,6 +12,9 @@
 .fuse_hidden*
 .nfs*
 
+# direnv
+.direnv
+
 # LaTeX intermediate files
 *.acn
 *.acr
@@ -36,6 +39,16 @@
 *.snm
 *.toc
 *.vrb
+
+## Build tool auxiliary files:
+*.fdb_latexmk
+*.synctex
+*.synctex(busy)
+*.synctex.gz
+*.synctex.gz(busy)
+*.pdfsync
+*.rubbercache
+rubber.cache
 
 # Generated PDF and tar archive in this directory
 /*.pdf
