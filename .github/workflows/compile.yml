@@ -19,11 +19,6 @@ jobs:
           apk add inkscape
           make
 
-  push:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
     - name: Copy output
       run: mkdir -p build && cp report.pdf build
       
