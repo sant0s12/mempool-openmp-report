@@ -39,6 +39,7 @@
 *.snm
 *.toc
 *.vrb
+*.tdo
 
 ## Build tool auxiliary files:
 *.fdb_latexmk

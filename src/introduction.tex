@@ -1,8 +1,9 @@
 \chapter{Introduction} \label{ch:introduction}
 
 MemPool~\cite{mempool} is an open-source manycore architecture developed at ETH. It is comprised of
-many 32-bit RISC-V Snitch~\cite{snitch} cores that share a common L1 cache. Unlike on GPUs, each
-core is individually programmable, therefore enabling the familiar shared memory programming model.
+up to 1024~\cite{terapool} 32-bit RISC-V Snitch~\cite{snitch} cores that share a common L1 cache.
+Unlike on GPUs, each core is individually programmable, therefore enabling the familiar shared
+memory programming model.
 
 Although MemPool's parallelism can be harnessed by manually managing it using the primitives
 provided by MemPool's C runtime library, this can become a tedious and error prone task since the
