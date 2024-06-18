@@ -351,7 +351,7 @@
 
 \AtBeginDocument{%
  \maketitle
- \bibliographystyle{IEEEtran}
+ \bibliographystyle{IEEEtranN}
 }
 
 \AtEndDocument{%

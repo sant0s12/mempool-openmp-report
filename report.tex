@@ -1,8 +1,8 @@
 \documentclass[parskip]{iisreport}
 
 \usepackage{pdfpages}
-
 \usepackage{todonotes}
+\usepackage[numbers]{natbib}
 
 % Uncomment the following line to disable the todo notes.
 % \usepackage[disable]{todonotes}
@@ -25,6 +25,8 @@
 \titlelogoheight{7cm}
 
 \begin{document}
+
+\input{acr/main.tex}
 
 \frontmatter
 
@@ -53,8 +55,6 @@
 
 \backmatter
 
-\input{acr/main.tex}
-\input{acr/latex_and_writing.tex} % TODO: Remove this line when you no longer need the writing guidelines.
 \listofacronyms
 
 \listoffigures

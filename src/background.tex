@@ -1,23 +1,94 @@
 \chapter{Background}
 \label{ch:background}
 
-{\color{red}
-	Explain the background and theory underlying your project.
-	Assume that the average reader has the same knowledge you had \emph{before} undergoing this project.
-	This chapter should transfer all knowledge necessary to understand the following chapters.
+\section{MemPool}
+\label{sec:mempool}
 
-	As this and the following chapters are likely longer than a few pages, consider structuring them into sections (but avoid fragmentation by overly fine-grained sectioning).
-	Use the \verb|\..section{}| command family as illustrated below:
+As demand for processing of highly parallel workloads grow over time, computing architectures
+with increasing core/processing element counts become more common. These can range all the way
+from custom accelerators with domain-specific architectures and programming models, to
+general-purpose multi-core processors. There is generally a trade-off between ease of programming
+and performance/efficiency.
 
-	\section{First section}
-	\label{sec:background_overview}
+One can achieve an interesting middle ground by grouping many relatively simple general purpose
+cores into a so called \emph{compute cluster}. In practice, however, this approach does not scale
+well beyond a few tens of cores, which lead to the development of \emph{multi-cluster} architectures
+comprised of many of such clusters. While this allows for greater core counts, it also introduces
+additional complexity and memory access overhead between each cluster.
 
-	\subsection{First subsection}
+MemPool tries to address this issue by scaling a single cluster to the order of hundreds of cores
+that share a low-latency software managed L1 cache.
 
-	\subsection{Second subsection}
+\subsection{Architecture Overview}
+\label{subsec:mempool_architecture}
 
-	\subsubsection{First subsubsection}
+\todo{Mention snitch core and l1 latency}
 
-	Follow a top-down approach when structuring the chapter, and guide the reader by giving a short overview at the beginning of each section.
-	Again, you can use labels and references (e.g., referring to \cref{sec:background_overview}).
-}
+MemPool's architecture is hierarchical and comprised of the following building blocks:
+
+\paragraph{Tile} A tile is made up of a number of cores, some shared L1 banks, an L1 instruction
+cache shared amongst the tile's cores, as well as a set of remote ports to send/receive requests
+to/from other tiles trying to access the global L1 cache. Finally, it also has an \gls{axi} port
+connected to the system bus, which allows the tile to access the global L2 cache or system memory.
+
+\paragraph{Group} A group is made up of multiple tiles. Each tile's remote ports are connected with
+each other both within the same group as well as with other groups through a series of
+interconnects. Each tile's \gls{axi} port is connected to the rest of the system, also supporting
+\gls{dma}.
+
+\paragraph{Cluster} Finally, a cluster is made up of multiple groups. Here, an \gls{axi} interface
+is used to connect MemPool to the rest of the system (e.g., L2 cache, system memory, etc.).
+\\
+
+Another interesting aspect of MemPool's architecture is the \emph{hybrid memory addressing scheme}.
+MemPool's shared L1 memory is interleaved at the word level across all banks. This means that
+accessing any given sequential region of memory would result in many strided accesses to remote
+tiles. This is not an issue for data shared across all cores, however, it is needlessly costly for
+local data (e.g., the stack). For this reason, MemPool is able to dedicate \emph{sequential regions}
+of memory that are interleaved only within the same tile by re-interpreting the memory address,
+which is entirely done in hardware.
+
+\section{OpenMP}
+\label{sec:openmp}
+
+In her report~\cite{herokmp}, \citeauthor{herokmp} provides a comprehensive overview of OpenMP and
+its most commonly used constructs and clauses. This work will implement all of the ones mentioned in
+her work, as well as the \emph{teams} construct, described in the following:
+
+The \emph{teams} construct uses the following syntax:
+
+\begin{lstlisting}[language=C, caption={teams construct}, label={lst:teams}]
+#pragma omp teams [clause[ [,] clause] ... ] new-line
+  structured-block
+\end{lstlisting}
+
+with the following clauses:
+
+\begin{lstlisting}[language=C, caption={teams clauses}, label={lst:teams}]
+num_teams(scalar-integer-expression)
+
+thread_limit(scalar-integer-expression)
+
+default(shared | firstprivate | private | none)
+
+private(list)
+
+firstprivate(list)
+
+shared(list)
+
+reduction([default ,] reduction-identifier : list)
+
+allocate([allocator :] list)
+\end{lstlisting}
+
+The \emph{teams} construct is used to create a league of teams, where each team is a group of
+threads. The number of teams is less then or equal to the value defined by the \emph{num\_teams}
+clause, and the maximum number of threads in each team is less than or equal to the value defined by
+the \emph{thread\_limit} clause.
+
+The \emph{structured_block} is able to contain other OpenMP constructs such as \emph{parallel},
+meaning that this construct essentially allows the creation of independent groups of threads, each
+of which could work on different tasks. This is particularly useful in the context of MemPool, as
+it allows for the creation of multiple teams, each of which could be assigned to a different tile or
+group (or even to different clusters in a multi-cluster system).
