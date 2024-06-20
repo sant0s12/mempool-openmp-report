@@ -257,7 +257,7 @@ void GOMP_loop_end() {
 To implement barriers, the runtime makes calls to \texttt{mempool\_barrier} as implemented in
 MemPool's runtime library. It makes use of MemPool's interrupt capabilities to wake up all cores
 when the last core reaches the barrier. Note that cores that are not participating in the parallel
-execution will also be woken, up but they will immediately go back to sleep because of the check on
+execution will also be woken up, but they will immediately go back to sleep because of the check on
 \cref{line:run-task-check} in \cref{lst:run-task}.
 
 \begin{lstlisting}[language=C, caption={mempool\_barrier Implementation}, label={lst:mempool-barrier},
@@ -279,3 +279,9 @@ void mempool_barrier(uint32_t num_cores) {
 
 \section{HERO LLVM Implementation}
 \label{subsec:hero_llvm_implementation}
+
+In her work~\cite{herokmp}, \citeauthor{herokmp} also implements an OpenMP runtime library
+compatible with LLVM, however for the HERO~\cite{hero} platform. The main difference between the
+\gls{gcc} and LLVM implementations is that they use a different \gls{api} (i.e., the compiler
+directives get translated into different function calls). The LLVM team provides a reference
+document~\cite{kmpref} describing the internal runtime interface.
