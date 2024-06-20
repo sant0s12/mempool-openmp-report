@@ -23,28 +23,30 @@ to roughly do the following:
 	      of its parallelism capabilities and primitives.
 \end{enumerate}
 
-Both GCC and LLVM provide an OpenMP runtime library interface that bridges the gap between both
-points: instead of directly generating a binary from OpenMP annotated code, the compiler generates
-calls to the OpenMP runtime library. This library has to be aware of how to parallelize the code
-given the platform, which makes it inherently non-portable. Naturally, popular compilers ship with
-their own OpenMP runtime library implementation, however, in order to get around the non-portability
-issue, they target a host running an operating system which is able to provide the necessary
-parallelism primitives. Since MemPool is designed to run bare-metal applications, this means that
-a custom OpenMP runtime library has to be developed.
+Both the \gls{gcc} and LLVM provide an OpenMP runtime library interface that bridges the gap between
+both points: instead of directly generating a binary from OpenMP annotated code, the compiler
+generates calls to the OpenMP runtime library. This library has to be aware of how to parallelize
+the code given the platform, which makes it inherently non-portable. Naturally, popular compilers
+ship with their own OpenMP runtime library implementation, however, in order to get around the
+non-portability issue, they target a host running an operating system which is able to provide the
+necessary parallelism primitives. Since MemPool is designed to run bare-metal applications, this
+means that a custom OpenMP runtime library has to be developed.
 
-Previously, the authors of MemPool developed a GCC compatible OpenMP runtime library with support
-for the most commonly used OpenMP constructs, such as \emph{work sharing}, \emph{critical sections}
-and \emph{atomics}.\footnote{This implementation will be discussed in more detail in
-\cref{ch:related_work}.} However, as the MemPool team increasingly relies on the LLVM compiler
-infrastructure, it is essential to have a compatible OpenMP runtime library for LLVM as well.
+Previously, the authors of MemPool developed a \gls{gcc} compatible OpenMP runtime library with
+support for the most commonly used OpenMP constructs, such as \emph{work sharing}, \emph{critical
+sections} and \emph{atomics}.\footnote{This implementation will be discussed in more detail in
+\cref{sec:gcc_implementation}.} However, as the MemPool team increasingly relies on the LLVM
+compiler infrastructure, it is essential to have a compatible OpenMP runtime library for LLVM as
+well.
 
 The goal of this project is to implement an OpenMP runtime for LLVM that works on MemPool, supports
-at least the same set of features as the previous GCC runtime and achieves comparable performance.
+at least the same set of features as the previous \gls{gcc} runtime and achieves comparable
+performance.
 
 The runtime will be implemented in C++ as detailed in \cref{ch:implementation}. In
 \cref{ch:results}, the new runtime will be evaluated in terms of performance and correctness against
-the GCC runtime. Finally, we will summarize the results and discuss possible shortcomings and future
-work in \cref{ch:conclusion}.
+the \gls{gcc} runtime. Finally, we will summarize the results and discuss possible shortcomings and
+future work in \cref{ch:conclusion}.
 
 % The introduction motivates your work and puts it into a bigger context. It should answer the
 % following questions: What is the background of this work? What is the state of the art? Why is

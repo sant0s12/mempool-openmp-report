@@ -16,13 +16,16 @@ well beyond a few tens of cores, which lead to the development of \emph{multi-cl
 comprised of many of such clusters. While this allows for greater core counts, it also introduces
 additional complexity and memory access overhead between each cluster.
 
-MemPool tries to address this issue by scaling a single cluster to the order of hundreds of cores
-that share a low-latency software managed L1 cache.
+MemPool~\cite{mempool} tries to address this issue by scaling a single cluster to the order of
+hundreds of cores that share a low-latency software managed L1 cache.
 
 \subsection{Architecture Overview}
 \label{subsec:mempool_architecture}
 
-\todo{Mention snitch core and l1 latency}
+At the heart of MemPool is the \emph{Snitch} core, which is a simple, in-order, 32-bit RISC-V core.
+This core was adapted for this architecture by adding the ability to retire out-of-order load
+instructions, which, in addition to its previously existing support for issuing multiple outstanding
+loads and stores through scoreboarding, allows MemPool to completely hide the L1 access latency.
 
 MemPool's architecture is hierarchical and comprised of the following building blocks:
 
@@ -52,8 +55,8 @@ which is entirely done in hardware.
 \label{sec:openmp}
 
 In her report~\cite{herokmp}, \citeauthor{herokmp} provides a comprehensive overview of OpenMP and
-its most commonly used constructs and clauses. This work will implement all of the ones mentioned in
-her work, as well as the \emph{teams} construct, described in the following:
+its most commonly used constructs and clauses. In this work, we will implement all of the ones
+mentioned in her work, as well as the \emph{teams} construct, described in the following:
 
 The \emph{teams} construct uses the following syntax:
 
@@ -64,7 +67,7 @@ The \emph{teams} construct uses the following syntax:
 
 with the following clauses:
 
-\begin{lstlisting}[language=C, caption={teams clauses}, label={lst:teams}]
+\begin{lstlisting}[language=C, caption={teams clauses}, label={lst:teams-clauses}]
 num_teams(scalar-integer-expression)
 
 thread_limit(scalar-integer-expression)

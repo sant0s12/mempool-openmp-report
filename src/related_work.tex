@@ -1,11 +1,281 @@
 \chapter{Related Work}
 \label{ch:related_work}
 
-\begin{itemize}
-	\item Previous gcc implementation
-    \item HERO LLVM implementation~\cite{herokmp}
-\end{itemize}
+\section{GCC Implementation}
+\label{sec:gcc_implementation}
 
-\todo[inline]{Discuss the state-of-the art and other related work. Depending on how much related work exists
-	and how central the comparison to it is in your thesis (discuss this with your advisors), the
-	introduction may contain sufficient related work and this chapter can be omitted.}
+As previously mentioned, MemPool already had a working OpenMP runtime library for \gls{gcc}. In the
+following, we will briefly discuss its architecture and implementation.
+
+\subsection{Event Loop}
+\label{subsec:event_loop}
+
+Because the entry point of the application is the same for all cores, it is necessary to distinguish
+between master and worker cores at runtime. Therefore, every application intended to use the
+\gls{gcc} OpenMP runtime has to include the code shown on \cref{lst:event_loop} in its main file.
+Essentially, it distinguishes between two cases:
+
+\begin{enumerate}
+	\item If the current core has ID 0 (i.e., it is the master core), it will continue executing
+	      standard OpenMP code (i.e., containing \texttt{\#pragma omp parallel} directives, etc.).
+	\item Otherwise, it will enter an infinite loop, where the core first goes to sleep and waits
+	      for an interrupt, and then participates in the parallel execution of the program by
+	      running its assigned task. Waking up other cores and assigning tasks is done by the
+	      master core when it encounters OpenMP constructs that require it.
+\end{enumerate}
+
+\begin{lstlisting}[language=C, caption={Main Event Loop}, label={lst:event_loop}]
+uint32_t core_id = mempool_get_core_id();
+
+if (core_id == 0) {
+  /* OpenMP Code */
+} else {
+  while (1) {
+    mempool_wfi();
+    run_task(core_id);
+  }
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=C, caption={run\_task Implementation}, label={lst:run-task},
+                   escapechar=@]
+typedef struct {
+  void (*fn)(void *);
+  void *data;
+  uint32_t nthreads;
+  uint32_t barrier;
+  uint8_t thread_pool[NUM_CORES];
+} event_t;
+
+void run_task(uint32_t core_id) {
+  if (event.thread_pool[core_id]) { @\label{line:run-task-check}@
+    event.fn(event.data);
+    __atomic_add_fetch(&event.barrier, -1, __ATOMIC_SEQ_CST);
+  }
+}
+\end{lstlisting}
+
+\cref{lst:run-task} shows the implementation of \texttt{run\_task} as well as \texttt{event\_t}.
+Since this implementation assumes at most a single team (i.e., group of threads) working on a single
+task, it uses a global variable \texttt{event} of type \texttt{event\_t} to store the task
+information.
+
+The thread first checks if it is supposed to participate in the parallel execution by checking
+whether \texttt{event.thread\_pool[core\_id]} is set. If it is, it executes the function pointed to
+by \texttt{event.fn} and decrements the barrier, which makes sure that all threads have finished
+their work before starting the next task.
+
+\begin{lstlisting}[language=C, caption={set\_event Implementation}, label={lst:set-event}]
+void set_event(void (*fn)(void *), void *data, uint32_t nthreads) {
+  uint32_t num_cores = mempool_get_core_count();
+  event.fn = fn;
+  event.data = data;
+  if (nthreads == 0) {
+    event.nthreads = num_cores;
+    event.barrier = num_cores;
+  } else {
+    event.nthreads = nthreads;
+    event.barrier = nthreads;
+  }
+
+  for (uint32_t i = 0; i < num_cores; i++) {
+    event.thread_pool[i] = (i < event.nthreads) ? 1 : 0;
+  }
+}
+\end{lstlisting}
+
+A task is set when the master thread calls \texttt{set\_event} (\cref{lst:set-event}) after
+encountering an OpenMP construct that requires it. The function pointer and its arguments are passed
+through \texttt{fn} and \texttt{data}, respectively. The number of threads that should participate
+in the parallel execution is passed through \texttt{nthreads}. If \texttt{nthreads} is 0, all cores
+will execute it. This is controlled by the \texttt{event.thread\_pool} array.
+
+\subsection{Parallel Regions}
+\label{subsec:parallel_regions}
+
+OpenMP parallel constructs will be transformed into calls to \texttt{GOMP\_parallel}, which is
+responsible for setting the current task, waking up all cores, and waiting for them to finish. Note
+that this function is only called by the master thread.
+
+\begin{lstlisting}[language=C, caption={GOMP\_parallel Implementation}, label={lst:gomp-parallel},
+                   escapechar=@]
+void GOMP_parallel_start(void (*fn)(void *), void *data,
+                         unsigned int num_threads) {
+  set_event(fn, data, num_threads);
+  wake_up_all();
+  mempool_wfi();
+}
+
+void GOMP_parallel_end(void) {
+  uint32_t num_cores = mempool_get_core_count();
+  while (event.barrier > 0) {
+    mempool_wait(4 * num_cores);
+  }
+}
+
+void GOMP_parallel(void (*fn)(void *), void *data,
+                   unsigned int num_threads,
+                   unsigned int flags) {
+  uint32_t core_id = mempool_get_core_id();
+  gomp_new_work_share(); @\label{line:new-work-share}@
+  GOMP_parallel_start(fn, data, num_threads);
+  run_task(core_id);
+  GOMP_parallel_end();
+}
+\end{lstlisting}
+
+\subsection{Work Sharing Constructs}
+\label{subsec:work_sharing_constructs}
+
+Work sharing constructs (e.g., \texttt{for}, \texttt{sections}, etc.) allow for threads in the
+current team to distribute the work to be done in a given parallel region. A global variable of type
+\texttt{work\_t} is used for the bookkeeping related to these constructs and is initialized by
+calling \texttt{gomp_new\_work\_share} (\cref{lst:gomp-parallel}, \cref{line:new-work-share}).
+
+\begin{lstlisting}[language=C, caption={work_t Struct}, label={lst:work-t}]
+typedef struct {
+  int end;
+  int next;
+  int chunk_size;
+  int incr;
+
+  omp_lock_t lock;
+
+  // for single construct
+  uint32_t checkfirst;
+  uint32_t completed;
+  void *copyprivate;
+
+  // for critical construct
+  omp_lock_t critical_lock;
+
+  // for atomic construct
+  omp_lock_t atomic_lock;
+} work_t;
+\end{lstlisting}
+
+As an example for a work sharing construct, \cref{lst:gomp-loop-dynamic} shows the implementation of
+the functions required for a dynamically scheduled for loop construct (i.e., \texttt{\#pragma omp
+parallel for schedule(dynamic)}).
+
+\texttt{GOMP_parallel_loop\_dynamic} (\cref{line:gomp-parallel-loop-dynamic}) is very similar to
+\texttt{GOMP\_parallel}, but it also initializes the loop bounds and chunk size with
+\texttt{gomp\_loop\_init} (\cref{line:gomp-loop-init}).
+
+ Each thread calls \texttt{GOMP\_loop\_dynamic\_start} (\cref{line:gomp-loop-dynamic-start}) once
+ and \texttt{GOMP\_loop\_dynamic\_next} (\cref{line:gomp-loop-dynamic-next}) continuously afterwards
+ until the loop is finished. The former checks if another thread already initialized the loop bounds
+ and chunk size, and initializes them if that is not the case. Then, it atomically increments the
+ start of the next chunk for the next thread to use and sets the bounds of the current chunk for the
+ current thread. This is done again with every call to \texttt{GOMP\_loop\_dynamic\_next}.
+
+ \pagebreak
+
+\begin{lstlisting}[language=C, caption={GOMP Dynamic For Loop Implementation},
+                   label={lst:gomp-loop-dynamic}, escapechar=@]
+int GOMP_loop_dynamic_start(int start, int end, int incr, @\label{line:gomp-loop-dynamic-start}@
+                            int chunk_size, int *istart,
+                            int *iend) {
+  int chunk, left;
+  int ret = 1;
+
+  if (gomp_work_share_start()) { // work returns locked
+    gomp_loop_init(start, end, incr, chunk_size);
+  }
+  gomp_hal_unlock(&works.lock);
+
+  chunk = chunk_size * incr;
+
+  start = __atomic_fetch_add(&works.next, chunk, __ATOMIC_SEQ_CST);
+
+  if (start >= works.end) {
+    ret = 0;
+  }
+
+  if (ret) {
+    left = works.end - start;
+
+    if (chunk > left) {
+      end = works.end;
+    } else {
+      end = start + chunk;
+    }
+  }
+
+  *istart = start;
+  *iend = end;
+
+  return ret;
+}
+
+int GOMP_loop_dynamic_next(int *istart, int *iend) { @\label{line:gomp-loop-dynamic-next}@
+  int start, end, chunk, left;
+
+  chunk = works.chunk_size * works.incr;
+  start = __atomic_fetch_add(&works.next, chunk, __ATOMIC_SEQ_CST);
+
+  if (start >= works.end) {
+    return 0;
+  }
+
+  left = works.end - start;
+
+  if (chunk > left) {
+    end = works.end;
+  } else {
+    end = start + chunk;
+  }
+
+  *istart = start;
+  *iend = end;
+
+  return 1;
+}
+
+void GOMP_parallel_loop_dynamic(void (*fn)(void *), void *data, @\label{line:gomp-parallel-loop-dynamic}@
+                                unsigned num_threads, long start,
+                                long end, long incr, long chunk_size) {
+  uint32_t core_id = mempool_get_core_id();
+
+  gomp_new_work_share();
+  gomp_loop_init(start, end, incr, chunk_size); @\label{line:gomp-loop-init}@
+
+  GOMP_parallel_start(fn, data, num_threads);
+  run_task(core_id);
+  GOMP_parallel_end();
+}
+
+void GOMP_loop_end() {
+  uint32_t core_id = mempool_get_core_id();
+  mempool_barrier_gomp(core_id, event.nthreads);
+}
+\end{lstlisting}
+
+\subsection{Barriers}
+\label{subsec:barriers}
+
+To implement barriers, the runtime makes calls to \texttt{mempool\_barrier} as implemented in
+MemPool's runtime library. It makes use of MemPool's interrupt capabilities to wake up all cores
+when the last core reaches the barrier. Note that cores that are not participating in the parallel
+execution will also be woken, up but they will immediately go back to sleep because of the check on
+\cref{line:run-task-check} in \cref{lst:run-task}.
+
+\begin{lstlisting}[language=C, caption={mempool\_barrier Implementation}, label={lst:mempool-barrier},
+                   escapechar=@]
+void mempool_barrier(uint32_t num_cores) {
+  // Increment the barrier counter
+  if ((num_cores - 1) == __atomic_fetch_add(&barrier, 1,
+                                            @@__ATOMIC_RELAXED)) {
+    @@__atomic_store_n(&barrier, 0, __ATOMIC_RELAXED);
+    @@__sync_synchronize(); // Full memory barrier
+    wake_up_all();
+  }
+  // Some threads have not reached the barrier --> Let's wait
+  // Clear the wake-up trigger for the last core reaching the barrier
+  // as well
+  mempool_wfi();
+}
+\end{lstlisting}
+
+\section{HERO LLVM Implementation}
+\label{subsec:hero_llvm_implementation}
