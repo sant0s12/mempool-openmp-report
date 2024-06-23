@@ -124,8 +124,11 @@ and \texttt{plastiter}, which becomes unsigned.
 	\item \texttt{plastiter}: Pointer to the \emph{last iteration} flag. This is set to 1 if the
 	      calling thread is the one to execute the last iteration of the loop.
 	\item \texttt{plower}: Pointer to the lower bound of the iteration range for the current thread.
+	      This is initially set to the global lower bound for the loop.
 	\item \texttt{pupper}: Pointer to the upper bound of the iteration range for the current thread.
-	\item \texttt{pstride}: Pointer to the stride of the iteration range.
+	      This is initially set to the global lower bound for the loop.
+	\item \texttt{pstride}: Pointer to the stride of the iteration range. This is the distance between
+	      two work chunks assigned to the same thread.
 	\item \texttt{incr}: Increment amount of the loop iteration variable.
 	\item \texttt{chunk}: Chunk size.
 \end{itemize}
@@ -293,11 +296,11 @@ void __kmpc_end_critical(ident_t *loc, kmp_int32 gtid,
 
 \subsubsection{\texttt{__kmpc_master and __kmpc_single}}
 
-\paragraph{Description} These functions are used to implement \texttt{master} and \texttt{single}
-constructs respectively. They are called by every thread before entering a \texttt{master} or
-\texttt{single} section. \texttt{\_\_kmpc\_master} needs to make sure that only the master thread of
-the team executes the section, while \texttt{\_\_kmpc\_single} needs to make sure that only a single
-thread executes it, however, it does not need to be the master thread.
+\paragraph{Description} These functions are used to implement the \texttt{master} and
+\texttt{single} constructs respectively. They are called by every thread before entering a
+\texttt{master} or \texttt{single} section. \texttt{\_\_kmpc\_master} needs to make sure that only
+the master thread of the team executes the section, while \texttt{\_\_kmpc\_single} needs to make
+sure that only a single thread executes it, however, it does not need to be the master thread.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -373,7 +376,7 @@ broadcasting the private data of the thread that executed it to the other thread
 \end{itemize}
 
 \paragraph{Implementation} This function just calls the \texttt{copyPrivate} method (\todo{ref}) on
-the object representing the current thread.
+the object representing the current team that the calling thread belongs to.
 
 \begin{lstlisting}[language=C, caption={__kmpc_copyprivate},
                    label={lst:kmpc-copyprivate}, escapechar=@]
@@ -381,8 +384,8 @@ void __kmpc_copyprivate(ident_t *loc, kmp_int32 gtid, size_t cpy_size,
                         void *cpy_data,
                         void (*cpy_func)(void *, void *),
                         kmp_int32 didit) {
-  kmp::runtime::getThread(gtid).copyPrivate(loc, gtid, cpy_size,
-                                            cpy_data, cpy_func, didit);
+  kmp::runtime::getThread(gtid).getCurrentTeam()->copyPrivate(
+      loc, gtid, cpy_size, cpy_data, cpy_func, didit);
 };
 \end{lstlisting}
 
@@ -618,6 +621,7 @@ is why they are \texttt{void} pointers.
 \end{itemize}
 
 \subsection{Barrier}
+\label{subsec:barrier}
 This class is used to implement a thread barrier.
 
 \subsubsection{Attributes}
@@ -627,7 +631,7 @@ This class is used to implement a thread barrier.
 	\item \texttt{std::atomic<kmp_int32> generation}: Atomic counter used to distinguish between
 	      generations when using the \emph{generation barrier}. This is not used in the \emph{WFI
 		      barrier}.
-	\item \texttt{volatile int32_t numThreads}: Number of threads participating in the barrier.
+	\item \texttt{int32_t numThreads}: Number of threads participating in the barrier.
 \end{itemize}
 
 \subsubsection{Relevant Methods}
@@ -656,15 +660,16 @@ This class is used to implement a thread barrier.
                 // WFI barrier
 
                 // Increment the barrier counter
-                if ((numThreads - 1) == barrier.fetch_add(1, std::memory_order_relaxed)) {
+                if ((numThreads - 1) == barrier.fetch_add(1,
+                                                std::memory_order_relaxed)) {
                   barrier.store(0, std::memory_order_relaxed);
                   std::atomic_thread_fence(std::memory_order_seq_cst);
                   wake_up_all();
                 }
 
                 // Some threads have not reached the barrier --> Let's wait
-                // Clear the wake-up trigger for the last core reaching the barrier as
-                // well
+                // Clear the wake-up trigger for the last core reaching
+                // the barrier as well
                 mempool_wfi();
 
               } else {
@@ -672,7 +677,8 @@ This class is used to implement a thread barrier.
                 kmp_int32 gen = generation;
 
                 // Increment the barrier counter
-                if ((numThreads - 1) == barrier.fetch_add(1, std::memory_order_relaxed)) {
+                if ((numThreads - 1) == barrier.fetch_add(1,
+                                                std::memory_order_relaxed)) {
                   barrier.store(0, std::memory_order_relaxed);
                   generation.fetch_add(1, std::memory_order_relaxed);
                   std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -697,7 +703,7 @@ This class represents a single OpenMP thread running on a core.
 	\item \texttt{kmp_int32 tid}: Team-local ID of the thread.
 	\item \texttt{std::optional<Task> teamsRegion}: Optional task representing the body of the
 	      \texttt{teams} construct. This is only present in the master thread of the team.
-	\item \texttt{std::atomic<Team *> currentTeam}: Pointer to the team the thread is part of.
+	\item \texttt{Team *currentTeam}: Pointer to the team the thread is part of.
 	\item \texttt{Mutex running}: Mutex indicating whether the thread is running. It is locked if it
 	      is, unlocked otherwise. \todo{Explain why this is necessary.}
 	\item \texttt{std::optional<kmp_int32> requestedNumThreads}: Optional number of threads requested
@@ -800,12 +806,12 @@ This class represents a single OpenMP thread running on a core.
 	      global \texttt{runtime::teamsBarrier} (\todo{ref}) accordingly, and resets
 	      \texttt{runtime::requestedNumTeams} for the next call.
 
-          Next, it identifies the master threads of each team by dividing the total number of cores
-          into \texttt{runtime::numTeams} equally sized chunks. Then, for each thread except for the
-          calling thread\footnote{The thread with global ID 0 is always part of the default team,
-          therefore it is not necessary to create a new team for it.}(\todo{ref in footnote}), a new
-          team is created with master thread \texttt{coreId} and team ID \texttt{i}. After setting
-          the \texttt{teams} region and the requested thread limit, if any, the thread is woken up.
+	      Next, it identifies the master threads of each team by dividing the total number of cores
+	      into \texttt{runtime::numTeams} equally sized chunks. Then, for each thread except for the
+	      calling thread\footnote{The thread with global ID 0 is always part of the default team,
+		      therefore it is not necessary to create a new team for it.}(\todo{ref in footnote}), a new
+	      team is created with master thread \texttt{coreId} and team ID \texttt{i}. After setting
+	      the \texttt{teams} region and the requested thread limit, if any, the thread is woken up.
 
 	      The calling thread also sets its \texttt{teams} region and explicitly runs it after
 	      setting the requested thread limit if applicable. After executing the region, it is reset
@@ -858,11 +864,486 @@ This class represents a single OpenMP thread running on a core.
 
 \subsection{Team}
 
+This class is used to represent a team of threads.
+
+\subsubsection{Attributes}
+
+\begin{itemize}
+	\item \texttt{kmp_int32 masterGtid}: Global ID of the master thread of the team.
+	\item \texttt{kmp_int32 teamId}: ID of the team.
+	\item \texttt{kmp_int32 numThreads}: Number of threads in the team.
+	\item \texttt{Barrier barrier}: Barrier associated with the team.
+	\item \texttt{DynamicSchedule dynamicSchedule}: Struct containing information related to dynamic
+	      loops.
+	\item \texttt{void *copyPrivateData}: Pointer to the \texttt{copyprivate} data to be
+	      broadcast to the thereads in the team.
+	\item \texttt{Task implicitTask}: Task representing the implicit task of the team.
+\end{itemize}
+
+\subsubsection{Relevant Methods}
+
+\begin{itemize}
+	\item \texttt{void Team::run()}: This function is used to launch the team and is called by the
+	      master thread. It iterates sequentially over the threads with a global ID in the range
+	      $[\texttt{masterGtid},\: \texttt{masterGtid} + \texttt{numThreads} - 1]$, sets their team
+	      local thread ID, and, if they are not the master thread, sets the team pointer and wakes them
+	      up.
+
+	      \begin{lstlisting}[language=C, caption={void Team::run},
+          label={lst:team-run}, escapechar=@]
+            inline void run() {
+              for (kmp_int32 i = masterGtid; i < masterGtid + numThreads;
+                    i++) {
+                auto &thread = runtime::getThread(i);
+                thread.setTid(i - masterGtid);
+
+                if (i != masterGtid) {
+                  thread.setCurrentTeam(this);
+                  thread.wakeUp();
+                }
+              }
+            }
+          \end{lstlisting}
+
+	\item \texttt{void Team::forStaticInit(ident_t *loc, kmp_int32 gtid,\\kmp_sched_type schedtype,
+		      T *plastiter, T *plower, T *pupper,\\SignedT *pstride, SignedT incr, SignedT chunk)}:
+	      This function is used to determine the static loop parameters for the \texttt{for} and
+	      \texttt{distribute} constructs. It is called once by every participating thread.
+
+	      We assume that the loop increment is always 1, since this is the case for the code
+	      generated by LLVM 14.
+
+	      It first distinguishes between the \texttt{static} and \texttt{static_chunked} scheduling
+	      types. In the former case, the chunk size is not provided and is therefore calculated as
+	      the ceiling of the loop size divided by the number of threads, since the OpenMP standard
+	      specifies that the work should be distributed as evenly as possible. The switch case then
+	      falls through to the \texttt{static_chunked} case, where we assume that the chunk size is
+	      already provided.
+
+	      We define the \texttt{span} like on \citeauthor{herokmp}'s work as the distance between two
+	      consecutive iterations of the loop, possibly running on different threads. With this, we
+	      can calculate the \texttt{stride}, which just accounts for the number of threads in
+	      between to iterations running on the same thread.
+
+	      The \texttt{plower} bound is calculated by shifting the \texttt{span} \texttt{tid} times
+	      starting from the global lower bound, and \texttt{pupper} is that plus the \texttt{span}
+	      minus the increment. The \texttt{plastiter} flag is set to \texttt{true} if the calling
+	      thread is the last one to execute the loop.
+
+	      The scheduling related to the \texttt{distribute} construct is almost the same, except
+	      that the number of teams is used instead of the number of threads.
+
+	      \begin{lstlisting}[language=C, caption={void Team::forStaticInit},
+          label={lst:team-forstaticinit}, escapechar=@]
+            template <typename T,
+                      typename SignedT = typename std::make_signed<T>::type,
+                      typename UnsignedT =
+                                  typename std::make_unsigned<T>::type>
+            void forStaticInit(ident_t * loc, kmp_int32 gtid,
+                               kmp_sched_type schedtype, T *plastiter,
+                               T *plower, T *pupper, SignedT *pstride,
+                               SignedT incr, SignedT chunk) const {
+
+              assert(incr == 1 && "Loop increment is not 1");
+
+              switch (schedtype) {
+              case kmp_sch_static: {
+
+                // Calculate chunk size
+                chunk = static_cast<SignedT>(*pupper - *plower + 1) /
+                          numThreads +
+                        (static_cast<SignedT>(*pupper - *plower + 1) %
+                          numThreads != 0);
+
+                // Fall through to static chunked
+              }
+              case kmp_sch_static_chunked: {
+                assert(incr != 0 && "Loop increment must be non-zero");
+                assert(chunk > 0 && "Chunk size is not positive");
+                assert((static_cast<T>(chunk) <= *pupper - *plower + 1) &&
+                       "Chunk size is greater than loop size");
+
+                kmp_int32 tid = runtime::getThread(gtid).getTid();
+
+                SignedT numChunks =
+                    (static_cast<SignedT>(*pupper - *plower) + chunk) / chunk;
+
+                SignedT span = incr * chunk;
+                *pstride = span * static_cast<SignedT>(numThreads);
+                *plower = *plower + static_cast<T>(tid) *
+                            static_cast<T>(span);
+                *pupper = *plower + static_cast<T>(span - incr);
+                *plastiter = (tid == (numChunks - 1) % numThreads);
+
+                break;
+              }
+
+              // Distribute (teams)
+              case kmp_distribute_static: {
+
+                // Calculate chunk size
+                chunk =
+                    static_cast<SignedT>(*pupper - *plower + 1) /
+                      runtime::numTeams +
+                    (static_cast<SignedT>(*pupper - *plower + 1) %
+                      runtime::numTeams != 0);
+
+                // Fall through to static chunked
+              }
+              case kmp_distribute_static_chunked: {
+                assert(incr != 0 && "Loop increment must be non-zero");
+                assert(chunk > 0 && "Chunk size is not positive");
+                assert((static_cast<T>(chunk) <= *pupper - *plower + 1) &&
+                       "Chunk size is greater than loop size");
+
+                SignedT numChunks =
+                    (static_cast<SignedT>(*pupper - *plower) + chunk) / chunk;
+
+                SignedT span = incr * chunk;
+                *pstride = span * static_cast<SignedT>(runtime::numTeams);
+                *plower = *plower + static_cast<T>(teamId) *
+                            static_cast<T>(span);
+                *pupper = *plower + static_cast<T>(span - incr);
+                *plastiter = (teamId == (numChunks - 1) % runtime::numTeams);
+
+                break;
+              }
+              default: {
+                assert(false && "Unsupported scheduling type");
+                break;
+              }
+              }
+            }
+          \end{lstlisting}
+
+	\item \texttt{void Team::void dispatchInit(ident_t * loc, kmp_int32 gtid, kmp_sched_type
+		      schedtype, T lower, T upper, SignedT incr, SignedT chunk)}: This function is called
+	      once by every thread participating in a dynamic loop to initialize the dynamic schedule
+	      struct. The struct contains all of the loop parameters as well as a \texttt{valid} flag
+	      indicating whether the schedule has been initialized, a counter \texttt{numDone} to count
+	      how many threads have finished executing the loop, and a mutex to lock access to the
+	      struct since it is accessed concurrently by multiple threads.
+
+	      Our implementation of the function currently only supports the
+	      \texttt{kmp\_sch\_dynamic\_chunked} scheduling type.
+
+	      After locking the schedule struct, it first checks if the schedule has already been
+	      initialized by another thread and immediately returns if that is the case, since this only
+	      needs to be done once.
+
+	      Otherwise, \texttt{lower}, \texttt{upper} and \texttt{chunk} are directly stored, while
+	      the remaining parameters are calculated as in \cref{lst:team-forstaticinit}. Finally, the
+	      \texttt{valid} flag is set to \texttt{true}.
+
+	      \begin{lstlisting}[language=C, caption={struct Team::DynamicSchedule},
+          label={lst:team-dynamicschedule}, escapechar=@]
+            struct DynamicSchedule {
+              kmp_uint32 lowerNext = 0;
+              kmp_uint32 upper = 0;
+              kmp_uint32 chunk = 0; // Chunk size assumed to be positive
+              kmp_int32 incr = 0;
+              kmp_int32 stride = 0;
+
+              bool valid = false;
+              kmp_int32 numDone = 0;
+
+              Mutex mutex;
+            };
+          \end{lstlisting}
+
+	      \begin{lstlisting}[language=C, caption={void Team::dispatchInit},
+          label={lst:team-dispatchinit}, escapechar=@]
+            template <typename T,
+                      typename SignedT = typename std::make_signed<T>::type,
+                      typename UnsignedT =
+                                  typename std::make_unsigned<T>::type>
+            void dispatchInit(ident_t * loc, kmp_int32 gtid,
+                              kmp_sched_type schedtype, T lower, T upper,
+                              SignedT incr, SignedT chunk) {
+
+              assert(incr == 1 && "Loop increment is not 1");
+              assert(chunk > 0 && "Chunk size is not positive");
+              assert((static_cast<T>(chunk) <= upper - lower + 1) &&
+                     "Chunk size is greater than loop size");
+
+              switch (schedtype) {
+              case kmp_sch_dynamic_chunked: {
+                std::lock_guard<Mutex> lock(dynamicSchedule.mutex);
+
+                if (dynamicSchedule.valid) {
+                  return;
+                }
+
+                SignedT span = incr * chunk;
+
+                dynamicSchedule.lowerNext = static_cast<kmp_uint32>(lower);
+                dynamicSchedule.upper = static_cast<kmp_uint32>(upper);
+                dynamicSchedule.chunk = static_cast<kmp_uint32>(chunk);
+                dynamicSchedule.incr = incr;
+                dynamicSchedule.stride = span *
+                  static_cast<SignedT>(numThreads);
+
+                dynamicSchedule.valid = true;
+                break;
+              }
+              default: {
+                assert(false && "Unsupported scheduling type");
+                break;
+              }
+              };
+            }
+          \end{lstlisting}
+
+	\item \texttt{bool Team::dispatchNext(ident_t *loc, kmp_int32 gtid,\\SignedT *plastiter, T *plower, T
+		      *pupper, SignedT *pstride)}:\\ This function is called by a thread executing a dynamic
+	      loop to obtain the next chunk of iterations to execute. It uses the type variable
+	      \texttt{T} to account for the fact that there are both signed and unsigned versions of
+	      the entrypoint (\cref{subsubsec:kmpc-dispatch-next-4}) associated with this function.
+
+	      First, it locks the dynamic schedule object so that it can be safely modified, since
+	      other threads will try to access it concurrently. Then, it asserts that the schedule
+	      is initialized by checking that \texttt{valid} is \texttt{true}.
+
+	      Next, it checks if there is any work left to be done by seeing if \texttt{lowerNext}
+	      is greater than \texttt{upper}. If that is the case, then that means that there are no
+	      more work chunks available, so it increments the number of threads that are done. If
+	      all are done, it sets the \texttt{valid} flag to \texttt{false} and resets
+	      \texttt{numDone} so that the schedule can be reused. It returns \texttt{false} to
+	      indicate that there was no chunk left to execute.
+
+	      If there is work left, it sets the lower bound of the current chunk to \texttt{lowerNext}
+	      and increments \texttt{lowerNext} by the chunk size. \texttt{lowerNext} is checked
+	      again against \texttt{upper} to know if the current chunk is the last one. If that is
+	      the case, the upper bound is set to the global upper bound and \texttt{plastiter} is
+	      set to \texttt{true}. Otherwise, the upper bound is set to \texttt{lowerNext - 1} and
+	      \texttt{plastiter} is set to \texttt{false}. Finally, the stride is set to the stride
+	      of the schedule without modification and \texttt{true} is returned to indicate that
+	      there was a chunk to execute.
+
+	      \begin{lstlisting}[language=C, caption={void Team::dispatchNext},
+          label={lst:team-dispatchnext}, escapechar=@]
+            template <typename T,
+                      typename SignedT = typename std::make_signed<T>::type>
+            bool dispatchNext(ident_t *loc, kmp_int32 gtid,
+                              SignedT *plastiter, T *plower,
+                              T *pupper, SignedT *pstride) {
+
+              std::lock_guard<Mutex> lock(dynamicSchedule.mutex);
+              assert(dynamicSchedule.valid
+                      && "Dynamic schedule is not valid");
+
+              if (dynamicSchedule.lowerNext > dynamicSchedule.upper) {
+                if (++dynamicSchedule.numDone == numThreads) {
+                  dynamicSchedule.valid = false;
+                  dynamicSchedule.numDone = 0;
+                }
+
+                return false;
+              }
+
+              *plower = static_cast<T>(dynamicSchedule.lowerNext);
+
+              dynamicSchedule.lowerNext += dynamicSchedule.chunk;
+              if (dynamicSchedule.lowerNext > dynamicSchedule.upper) {
+                *pupper = static_cast<T>(dynamicSchedule.upper);
+                *plastiter = true;
+              } else {
+                *pupper = static_cast<T>(dynamicSchedule.lowerNext - 1);
+                *plastiter = false;
+              }
+
+              *pstride = dynamicSchedule.stride;
+
+              return true;
+            };
+          \end{lstlisting}
+
+	\item \texttt{void Team::copyPrivate(ident_t *loc, kmp_int32 gtid, size_t cpy_size, void
+		      *cpy_data, void (*cpy_func)(void *, void *), kmp_int32 didit)}: This function is used to
+	      implement the \texttt{copyprivate} clause of a  \texttt{single} section.
+
+	      If the calling thread executed the \texttt{single} section, as indicated by \texttt{didit}
+	      being unequal to 0, the pointer to the private data is stored in the team's \texttt{copyPrivateData}
+	      field. Otherwise, the private data is copied by calling \texttt{cpy\_func}.
+
+	      A barrier is executed in between to ensure that the pointer is set before the data is
+	      copied. The one at the end makes sure that all thread have copied the data before
+	      continuing.
+
+	      \begin{lstlisting}[language=C, caption={void Team::copyprivate},
+          label={lst:team-copyprivate}, escapechar=@]
+            inline void copyPrivate(ident_t *loc, kmp_int32 gtid,
+                                    size_t cpy_size, void *cpy_data,
+                                    void (*cpy_func)(void *, void *),
+                                    kmp_int32 didit) {
+              if (didit != 0) {
+                copyPrivateData = cpy_data;
+              }
+
+              barrier.wait();
+
+              if (didit == 0) {
+                cpy_func(cpy_data, copyPrivateData);
+              }
+
+              barrier.wait();
+            };
+          \end{lstlisting}
+
+	\item \texttt{Team::$\sim$Team}: This is the team's destructor. In order to avoid threads
+	      getting stuck in the barrier associated with the team object by spinning on the
+	      \texttt{generation} variable (\cref{subsec:barrier}), which would be deallocated when the team
+	      object is destroyed, the destructor waits for all threads in the team to go to sleep before
+	      destroying the team.
+
+	      \begin{lstlisting}[language=C, caption={Team::$\sim$Team},
+          label={lst:team-destructor}, escapechar=@, literate={~} {$\sim$}{1}]
+            inline ~Team() {
+              for (kmp_int32 i = masterGtid + 1; i < masterGtid + numThreads;
+                    i++) {
+                while (runtime::getThread(i).isRunning()) {
+                  // Wait for thread to finish
+                }
+              }
+            }
+          \end{lstlisting}
+
+\end{itemize}
+
 \section{Supporting Code}
 \label{sec:supporting-code}
 
 \subsection{Runtime Namespace}
 
+The \texttt{kmp::runtime} namespace contains global variables used throughout our implementation as
+well as some helper functions.
+
+\subsubsection{Global Variables}
+
+\begin{enumerate}
+	\item \texttt{threads}: Array of \texttt{Thread} objects, where each one is initialized with the
+	      corresponding core ID.
+	\item \texttt{defaultTeam}: Default team used if no \texttt{teams} construct is used.
+	\item \texttt{requestedNumTeams}: Number of teams requested by the \texttt{num\_teams} clause
+	      of a \texttt{teams} construct.
+	\item \texttt{requestedThreadLimit}: Number of threads requested by the \texttt{thread\_limit}
+	      clause of a \texttt{teams} construct.
+	\item \texttt{numTeams}: Number of teams currently running.
+	\item \texttt{teamsBarrier}: Barrier used to synchronize the end of a \texttt{teams} construct.
+\end{enumerate}
+
+\begin{lstlisting}[language=C, caption={Global Variables},
+	label={lst:global-variables}, escapechar=@, literate={~} {$\sim$}{1}]
+template <kmp_int32... Is>
+constexpr std::array<Thread, sizeof...(Is)>
+sequencetoArray(std::integer_sequence<kmp_int32, Is...> /*unused*/) {
+  return {{Is...}};
+}
+
+std::array<Thread, NUM_CORES> threads =
+    sequencetoArray(
+        std::make_integer_sequence<kmp_int32, NUM_CORES>{});
+
+Team defaultTeam(0, 0);
+
+std::optional<kmp_int32> requestedNumTeams;
+std::optional<kmp_int32> requestedThreadLimit;
+kmp_int32 numTeams = 1;
+
+Barrier teamsBarrier(NUM_GROUPS);
+\end{lstlisting}
+
+\subsubsection{Helper Functions}
+
+The helper functions are used to access and run threads more conveniently.
+
+\begin{lstlisting}[language=C, caption={Helper Functions},
+	label={lst:helper-functions}, escapechar=@, literate={~} {$\sim$}{1}]
+static inline void runThread(kmp_int32 core_id) {
+  threads[static_cast<kmp_uint32>(core_id)].run();
+};
+
+static inline Thread &getThread(kmp_int32 gtid) {
+  return threads[static_cast<kmp_uint32>(gtid)];
+};
+
+static inline Thread &getCurrentThread() {
+  return threads[mempool_get_core_id()];
+};
+\end{lstlisting}
+
 \subsection{Heap Allocation}
 
+In order to support heap allocation in C++, we implement the global \texttt{operator new} and
+\texttt{operator delete} functions. They are essentially wrappers around the \texttt{simple\_malloc}
+and \texttt{simple\_free} functions provided by the MemPool runtime library. Additionally, they use
+a globally defined mutex \texttt{allocLock} to make sure that only one thread uses the allocator at
+the same time, since neither \texttt{simple\_malloc} nor \texttt{simple\_free} are thread-safe.
+
+\begin{lstlisting}[language=C, caption={Heap Allocation Functions},
+	label={lst:heap-allocation}, escapechar=@, literate={~} {$\sim$}{1}]
+kmp::Mutex allocLock __attribute__((section(".l1")));
+
+void *operator new(size_t size) {
+  std::lock_guard<kmp::Mutex> lock(allocLock);
+  void *ptr = simple_malloc(size);
+  return ptr;
+}
+
+void operator delete(void *ptr) noexcept {
+  std::lock_guard<kmp::Mutex> lock(allocLock);
+  return simple_free(ptr);
+}
+
+void *operator new[](size_t size) {
+  return operator new(size);
+}
+
+void operator delete[](void *ptr) noexcept {
+  return operator delete(ptr);
+}
+\end{lstlisting}
+
+
 \subsection{Main Function Wrapper}
+
+In order to not have to write the code from \cref{lst:event_loop} manually in every OpenMP program,
+we implement a wrapper around the \texttt{main} function by compiling them with the \texttt{-wrap
+	main} linker flag, which renames the \texttt{main} function to \texttt{\_\_real\_main} and
+\texttt{\_\_wrap\_main} to \texttt{main}. This means that the branch depending on the core ID is
+done transparently to the user. Additionally, we can also perform initialization tasks before
+calling the real \texttt{main} function, such as initializing the MemPool heap allocators and
+initializing global variables.
+
+\begin{lstlisting}[language=C, caption={Main Function Wrapper},
+	label={lst:main-wrapper}, escapechar=@, literate={~} {$\sim$}{1}]
+extern "C" int __real_main();
+
+bool initLock = true;
+
+extern "C" int __wrap_main() {
+  const mempool_id_t core_id = mempool_get_core_id();
+  if (core_id == 0) {
+    // Init heap allocators
+    mempool_init(0);
+
+    // Call C++ global constructors
+    initGlobals();
+
+    initLock = false;
+
+    // Run the program
+    __real_main();
+
+    printf("Program done\n");
+  } else {
+    while (initLock) {
+      // Wait for initialization to finish
+    }
+
+    kmp::runtime::runThread(static_cast<kmp_int32>(core_id));
+  }
+
+  return 0;
+}
+\end{lstlisting}
