@@ -71,6 +71,7 @@ void __kmpc_fork_call(ident_t *loc, kmp_int32 argc,
 \end{lstlisting}
 
 \subsubsection{\texttt{\_\_kmpc\_push\_num\_threads}}
+\label{subsubsec:kmpc-push-num-threads}
 
 \paragraph{Description} This function is called when using the \texttt{num\_threads} clause in a
 parallel construct. It is used to request a specific number of threads to be used in the parallel
@@ -522,14 +523,14 @@ teams to create and \texttt{thread\_limit} limits the number of threads in each 
 
 \paragraph{Implementation} This function first checks if either \texttt{num\_teams} or
 \texttt{num\_threads} are greater than 0 and, if so, it sets the corresponding global variables
-(\todo{ref}) accordingly.
+(\todo{ref}) accordingly. The maximum number of teams is limited to half the number of cores.
 
 \begin{lstlisting}[language=C, caption={__kmpc_push_num_teams}, label={lst:kmpc-push-num-teams}, escapechar=@]
 void __kmpc_push_num_teams(ident_t *loc, kmp_int32 global_tid,
                            kmp_int32 num_teams,
                            kmp_int32 num_threads) {
   if (num_teams > 0) {
-    kmp::runtime::requestedNumTeams = num_teams;
+    kmp::runtime::requestedNumTeams = std::min(num_teams, NUM_CORES / 2);
   }
 
   if (num_threads > 0) {
@@ -592,13 +593,276 @@ kmp_int32 __kmpc_global_thread_num(ident_t *loc) {
 \section{C++ Classes}
 \label{sec:cpp-classes}
 
+\subsection{Task}
+
+The \texttt{Task} class is essentially a wrapper around a KMP \texttt{microtask}. This microtask
+represents a section of code to be run by a thread (e.g., the body of a \texttt{parallel} section).
+Additionally, this class also stores the arguments that must be passed to the \texttt{microtask}.
+These are used by the compiler to access variables outside of the \texttt{microtask}'s scope, which
+is why they are \texttt{void} pointers.
+
+\subsubsection{Attributes}
+
+\begin{itemize}
+	\item \texttt{kmpc_micro func}: Pointer to the \texttt{microtask} function.
+	\item \texttt{kmp_int32 argc}: Number of arguments passed to the \texttt{microtask} function.
+	\item \texttt{void **args}: Array containing the \texttt{microtask} arguments.
+\end{itemize}
+
+\subsubsection{Relevant Methods}
+
+\begin{itemize}
+	\item \texttt{void run(kmp_int32 gtid, kmp_int32 tid)}: Calls the \texttt{microtask} function
+	      with the arguments stored in \texttt{args} in addition to \texttt{gtid} and \texttt{tid},
+	      which are always expected to be passed as the first and second argument respectively.
+\end{itemize}
+
+\subsection{Barrier}
+This class is used to implement a thread barrier.
+
+\subsubsection{Attributes}
+\begin{itemize}
+	\item \texttt{std::atomic<kmp_int32> barrier}: Atomic counter used to keep track of the number of
+	      threads that have reached the barrier.
+	\item \texttt{std::atomic<kmp_int32> generation}: Atomic counter used to distinguish between
+	      generations when using the \emph{generation barrier}. This is not used in the \emph{WFI
+		      barrier}.
+	\item \texttt{volatile int32_t numThreads}: Number of threads participating in the barrier.
+\end{itemize}
+
+\subsubsection{Relevant Methods}
+
+\begin{itemize}
+	\item \texttt{void wait()}: This function implements the actual barrier. It distinguishes
+	      between two cases: if there is currently only a single team running, then a
+	      \emph{\gls{wfi} barrier} is used, otherwise a spinning \emph{generation barrier} is used.
+
+	      The first kind is essentially the same as in \cref{subsec:barriers}, with the only
+	      difference being that the \texttt{barrier} variable is not global, but a member of the
+	      \texttt{Barrier} class. This is important for the second kind of barrier, but it can also
+	      be used in this case for simplicity.
+
+	      If there are multiple teams, then a \emph{generation barrier} is used. This is because the
+	      \emph{WFI barrier} does not work when multiple teams are running concurrently, since the
+	      call to \texttt{wake\_up\_all} would wake up all threads in all teams, which would
+	      interfere with other barriers. This barrier works similarly, but instead of waiting for an
+	      interrupt, the threads spin on the \texttt{generation} variable, which is incremented by
+	      the last arriving thread.
+
+	      \begin{lstlisting}[language=C, caption={Barrier::wait}, label={lst:barrier-wait},
+          escapechar=@]
+            inline void wait() {
+              if (runtime::numTeams == 1) {
+                // WFI barrier
+
+                // Increment the barrier counter
+                if ((numThreads - 1) == barrier.fetch_add(1, std::memory_order_relaxed)) {
+                  barrier.store(0, std::memory_order_relaxed);
+                  std::atomic_thread_fence(std::memory_order_seq_cst);
+                  wake_up_all();
+                }
+
+                // Some threads have not reached the barrier --> Let's wait
+                // Clear the wake-up trigger for the last core reaching the barrier as
+                // well
+                mempool_wfi();
+
+              } else {
+                // Spin generation barrier
+                kmp_int32 gen = generation;
+
+                // Increment the barrier counter
+                if ((numThreads - 1) == barrier.fetch_add(1, std::memory_order_relaxed)) {
+                  barrier.store(0, std::memory_order_relaxed);
+                  generation.fetch_add(1, std::memory_order_relaxed);
+                  std::atomic_thread_fence(std::memory_order_seq_cst);
+                }
+
+                while (gen == generation.load(std::memory_order_relaxed)) {
+                  // Spin
+                }
+              }
+            };
+          \end{lstlisting}
+\end{itemize}
+
+\subsection{Thread}
+
+This class represents a single OpenMP thread running on a core.
+
+\subsubsection{Attributes}
+
+\begin{itemize}
+	\item \texttt{kmp_int32 gtid}: Global ID of the thread.
+	\item \texttt{kmp_int32 tid}: Team-local ID of the thread.
+	\item \texttt{std::optional<Task> teamsRegion}: Optional task representing the body of the
+	      \texttt{teams} construct. This is only present in the master thread of the team.
+	\item \texttt{std::atomic<Team *> currentTeam}: Pointer to the team the thread is part of.
+	\item \texttt{Mutex running}: Mutex indicating whether the thread is running. It is locked if it
+	      is, unlocked otherwise. \todo{Explain why this is necessary.}
+	\item \texttt{std::optional<kmp_int32> requestedNumThreads}: Optional number of threads requested
+	      by a previous call to \texttt{__kmpc_push_num_threads} (\cref{subsubsec:kmpc-push-num-threads}).
+\end{itemize}
+
+\subsubsection{Relevant Methods}
+
+\begin{itemize}
+	\item \texttt{void Thread::run()}: This function implements the infinite loop that each thread
+	      except the thread with global ID 0 runs to wait for and execute work assigned to it.
+
+	      First, the thread waits for an interrupt. After it is woken up, it acquires the \texttt{running}
+	      mutex and checks that it is part of a team by ensuring that \texttt{currentTeam} is not
+	      \texttt{null}, and whether it is the master thread of a team by checking if
+	      \texttt{teamsRegion} has a value.
+
+	      If \texttt{currentTeam} is not \texttt{null} and \texttt{teamsRegion} is empty, meaning
+	      that the calling thread is a worker thread, the thread executes the implicit task of the
+	      team (\todo{ref}), resets the \texttt{currentTeam} pointer, and executes the team's
+	      barrier associated with the end of the \texttt{parallel} region. The team pointer has to
+	      be reset before executing the barrier to avoid the case where a new team is assigned to
+	      the thread after the barrier but before resetting the pointer, which would cause the
+	      thread to miss the assignment to the new team.
+
+	      If \texttt{teamsRegion} has a value, that means that the current thread is the master
+	      thread of a team and therefore has to execute the body of the \texttt{teams} construct.
+	      After doing that, it resets the \texttt{teamsRegion} pointer, deletes the team object, and
+	      executes the runtime's barrier associated with the end of the \texttt{teams} construct.
+	      (\todo{ref}).
+
+	      \begin{lstlisting}[language=C, caption={Thread::run}, label={lst:thread-run},
+          escapechar=@]
+            void Thread::run() {
+              while (true) {
+                mempool_wfi();
+                std::lock_guard<Mutex> lock(running);
+
+                if (currentTeam != nullptr && !teamsRegion.has_value()) {
+
+                  (*currentTeam).getImplicitTask()->run(gtid, tid);
+
+                  Team *prevTeam = currentTeam;
+                  currentTeam = nullptr;
+
+                  (*prevTeam).getBarrier().wait();
+
+                } else if (teamsRegion.has_value()) {
+                  teamsRegion->run(gtid, tid);
+
+                  teamsRegion.reset();
+
+                  delete currentTeam;
+                  currentTeam = nullptr;
+
+                  runtime::teamsBarrier.wait();
+                }
+              }
+            };
+          \end{lstlisting}
+
+	\item \texttt{void Thread::forkCall(Task parallelRegion)}: This function is called by the master
+	      thread of a team when it encouters a \texttt{parallel} construct.
+
+	      It first checks if a specific number of threads has been requested and uses the total
+	      number of cores as the default if not. Then, it sets the number of threads for the team as
+	      well as the implicit task, which is then run on all threads in the team including the
+	      calling thread. Finally, it executes the team's barrier.
+
+	      \begin{lstlisting}[language=C, caption={Thread::forkCall},
+          label={lst:thread-forkCall},
+          escapechar=@]
+            void Thread::forkCall(Task parallelRegion) {
+              kmp_int32 numThreads = this->requestedNumThreads
+                                            .value_or(NUM_CORES);
+              this->requestedNumThreads.reset();
+
+              Team *team = currentTeam;
+
+              // Setup
+              team->setNumThreads(numThreads);
+              team->setImplicitTask(parallelRegion);
+
+              // Run on all threads
+              team->run();
+              parallelRegion.run(gtid, tid);
+
+              team->getBarrier().wait();
+            };
+    \end{lstlisting}
+
+	\item \texttt{void Thread::forkTeams(Task teamsRegion)}: This function is called by the thread
+	      with global ID 0 when it encounters a \texttt{teams} construct.
+
+	      First, it checks if a specific number of teams was requested and uses the number of groups
+	      (\cref{subsec:mempool_architecture}) as the default if not. This hints at the possibility
+	      of having different MemPool groups work on different parts of a given problem or on
+	      different problems altogether in the future. Then it sets both the global variable
+	      \texttt{runtime::numTeams} (\todo{ref}) and the number of threads participating in the
+	      global \texttt{runtime::teamsBarrier} (\todo{ref}) accordingly, and resets
+	      \texttt{runtime::requestedNumTeams} for the next call.
+
+          Next, it identifies the master threads of each team by dividing the total number of cores
+          into \texttt{runtime::numTeams} equally sized chunks. Then, for each thread except for the
+          calling thread\footnote{The thread with global ID 0 is always part of the default team,
+          therefore it is not necessary to create a new team for it.}(\todo{ref in footnote}), a new
+          team is created with master thread \texttt{coreId} and team ID \texttt{i}. After setting
+          the \texttt{teams} region and the requested thread limit, if any, the thread is woken up.
+
+	      The calling thread also sets its \texttt{teams} region and explicitly runs it after
+	      setting the requested thread limit if applicable. After executing the region, it is reset
+	      and the global \texttt{teams} barrier is executed, finally resetting the number of teams
+	      to 1.
+
+	      \begin{lstlisting}[language=C, caption={void Thread::forkTeams},
+          label={lst:thread-forkTeams},
+          escapechar=@]
+            void Thread::forkTeams(Task teamsRegion) {
+              runtime::numTeams = runtime::requestedNumTeams
+                                            .value_or(NUM_GROUPS);
+              runtime::teamsBarrier.setNumThreads(runtime::numTeams);
+              runtime::requestedNumTeams.reset();
+
+              kmp_int32 coresPerTeam = NUM_CORES / runtime::numTeams;
+
+              for (kmp_int32 i = 1; i < runtime::numTeams; i++) {
+                kmp_int32 coreId = i * coresPerTeam;
+
+                Thread &thread = runtime::getThread(coreId);
+
+                thread.setCurrentTeam(new Team(coreId, i));
+                thread.setTeamsRegion(teamsRegion);
+
+                if (runtime::requestedThreadLimit) {
+                  thread.requestNumThreads(
+                          runtime::requestedThreadLimit.value());
+                }
+
+                thread.wakeUp();
+              }
+
+              this->setTeamsRegion(teamsRegion);
+              if (runtime::requestedThreadLimit) {
+                this->requestNumThreads(
+                        runtime::requestedThreadLimit.value());
+              }
+
+              teamsRegion.run(gtid, tid);
+              this->teamsRegion.reset();
+
+              runtime::teamsBarrier.wait();
+
+              runtime::numTeams = 1;
+            };
+    \end{lstlisting}
+
+\end{itemize}
+
+\subsection{Team}
+
 \section{Supporting Code}
 \label{sec:supporting-code}
 
-{\color{red}
-	This chapter explains your contributions, be it algorithms, architectures, libraries, hardware, or others.
-	As usual, follow a top-down approach and break the chapter into meaningful sections.
-	It may even be necessary to split the chapter into multiple chapters (e.g., to separate architecture from implementation in a hardware design).
+\subsection{Runtime Namespace}
 
-	Derive a structure for this chapter that is meaningful for your report and discuss it with your advisors.
-}
+\subsection{Heap Allocation}
+
+\subsection{Main Function Wrapper}
