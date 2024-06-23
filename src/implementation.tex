@@ -109,7 +109,7 @@ sharing construct. It is responsible for setting the values of \texttt{plastiter
 Because this assignment is static, the function only needs to be called once per thread. There is a
 variant of this function for handling the case where the loop iteration variable is unsigned. The
 semantics and implementation are the same except for the type of \texttt{plower}, \texttt{pupper}
-and \texttt{plastiter}, which become unsigned.
+and \texttt{plastiter}, which becomes unsigned.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -118,7 +118,7 @@ and \texttt{plastiter}, which become unsigned.
 	\item \texttt{gtid}: Global ID of the calling thread.
 	\item \texttt{schedtype}: Type of scheduling to be used.
 	      \footnote{\url{
-			      https://github.com/llvm/llvm-project/blob/
+			      https://github.com/llvm/llvm-project/blob/%
 			      f28c006a5895fc0e329fe15fead81e37457cb1d1/openmp/runtime/src/kmp.h\#L357}}
 	\item \texttt{plastiter}: Pointer to the \emph{last iteration} flag. This is set to 1 if the
 	      calling thread is the one to execute the last iteration of the loop.
@@ -182,7 +182,7 @@ this function that handles unsigned loop iteration variables.
 	\item \texttt{gtid}: Global ID of the calling thread.
 	\item \texttt{schedtype}: Type of scheduling to be used.
 	      \footnote{\url{
-			      https://github.com/llvm/llvm-project/blob/
+			      https://github.com/llvm/llvm-project/blob/%
 			      f28c006a5895fc0e329fe15fead81e37457cb1d1/openmp/runtime/src/kmp.h\#L357}}
 	\item \texttt{lower}: Lower bound of the iteration range for the current thread.
 	\item \texttt{upper}: Upper bound of the iteration range for the current thread.
@@ -212,10 +212,11 @@ void __kmpc_dispatch_init_4(ident_t *loc, kmp_int32 gtid,
 \label{subsubsec:kmpc-dispatch-next-4}
 
 \paragraph{Description} This function is called by each thread after calling \texttt{dispatchInit}
-and after each iteration of the loop. It is responsible for setting the iteration variables for the
-current iteration of the loop that the calling thread should execute as well as updating the loop
-information shared across the team so that future calling threads can know what work is left to do.
-There is also a variant of this function that handles unsigned loop iteration variables.
+and after completing the previously assigned chunk of iterations. It is responsible for setting the
+iteration variables for the current chunk of the loop that the calling thread should execute, as
+well as updating the loop information shared across the team so that future calling threads can know
+what work is left to do. There is also a variant of this function that handles unsigned loop
+iteration variables.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -245,12 +246,12 @@ int __kmpc_dispatch_next_4(ident_t *loc, kmp_int32 gtid,
 }
 \end{lstlisting}
 
-\subsection{Critical Sections}
+\subsection{\texttt{critical} sections}
 
 \subsubsection{\texttt{__kmpc_critical and __kmpc_end_critical}}
 
-\paragraph{Description} These functions are used to implement critical sections.\\
-\texttt{\_\_kmpc\_critical} is called before entering a critical section and
+\paragraph{Description} These functions are used to implement \texttt{critical} sections.\\
+\texttt{\_\_kmpc\_critical} is called before entering a \texttt{critical} section and
 \texttt{\_\_kmpc\_end\_critical} is called before leaving it.
 
 \paragraph{Arguments}
@@ -258,14 +259,14 @@ int __kmpc_dispatch_next_4(ident_t *loc, kmp_int32 gtid,
 	\item \texttt{loc}: Pointer to a struct containing information about the source code location
 	      of the call.
 	\item \texttt{gtid}: Global ID of the calling thread.
-	\item \texttt{crit}: Pointer to a region of memory associated with the critical section. 8
+	\item \texttt{crit}: Pointer to a region of memory associated with the \texttt{critical} section. 8
 	      $\times$ 32 bits are made available by the compiler at the location pointed to by this
 	      argument.
 \end{itemize}
 
 \paragraph{Implementation} Both of these functions reinterpret the memory location pointed to by
 \texttt{crit} as a \texttt{kmp::Mutex} (\todo{ref}) object and use it to lock and unlock access to
-the critical section. We use a static assertion to make sure that the size of the
+the \texttt{critical} section. We use a static assertion to make sure that the size of the
 \texttt{kmp::Mutex} object is smaller than the size of the memory region.
 
 \begin{lstlisting}[language=C, caption={__kmpc_critical and __kmpc_end_critical},
@@ -282,8 +283,8 @@ void __kmpc_critical(ident_t *loc, kmp_int32 gtid,
 
 void __kmpc_end_critical(ident_t *loc, kmp_int32 gtid,
                          kmp_critical_name *crit) {
-		Mutex *mutex = reinterpret_cast<kmp::Mutex *>(*crit);
-		mutex->unlock();
+  Mutex *mutex = reinterpret_cast<kmp::Mutex *>(*crit);
+  mutex->unlock();
 };
 \end{lstlisting}
 
@@ -291,11 +292,11 @@ void __kmpc_end_critical(ident_t *loc, kmp_int32 gtid,
 
 \subsubsection{\texttt{__kmpc_master and __kmpc_single}}
 
-\paragraph{Description} These functions are used to implement master and single constructs
-respectively. They are called by every thread before entering a master or single section.
-\texttt{\_\_kmpc\_master} needs to make sure that only the master thread of the team executes the
-section, while \texttt{\_\_kmpc\_single} needs to make sure that only a single thread executes it,
-however, it does not need to be the master thread.
+\paragraph{Description} These functions are used to implement \texttt{master} and \texttt{single}
+constructs respectively. They are called by every thread before entering a \texttt{master} or
+\texttt{single} section. \texttt{\_\_kmpc\_master} needs to make sure that only the master thread of
+the team executes the section, while \texttt{\_\_kmpc\_single} needs to make sure that only a single
+thread executes it, however, it does not need to be the master thread.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -307,10 +308,10 @@ however, it does not need to be the master thread.
 \paragraph{Return Value} 1 if the calling thread should execute the section, 0 otherwise.
 
 \paragraph{Implementation} Both \texttt{\_\_kmpc\_master} and \texttt{\_\_kmpc\_single} are
-implemented identically for simplicity, since only letting the master thread execute single sections
-will always be correct, as there is only a single master thread per team. It essentially obtains the
-thread ID of the calling thread by calling \texttt{getTid()} on the thread object and compares it
-against 0, returning 1 if they are equal and 0 otherwise.
+implemented identically for simplicity, since only letting the master thread execute \texttt{single}
+sections will always be correct, as there is only a single master thread per team. It essentially
+obtains the thread ID of the calling thread by calling \texttt{getTid()} on the thread object and
+compares it against 0, returning 1 if they are equal and 0 otherwise.
 
 \begin{lstlisting}[language=C, caption={__kmpc_master and __kmpc_single},
                    label={lst:kmpc-master}, escapechar=@]
@@ -329,8 +330,8 @@ kmp_int32 __kmpc_single(ident_t *loc, kmp_int32 gtid) {
 
 \subsubsection{\texttt{__kmpc_end_master and __kmpc_end_single}}
 
-\paragraph{Description} These functions are called after the execution of a master or single section
-respectively by the thread that executed it.
+\paragraph{Description} These functions are called after the execution of a \texttt{master} or
+\texttt{single} section respectively by the thread that executed it.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -355,9 +356,9 @@ void __kmpc_end_single(ident_t *loc, kmp_int32 gtid){};
 \subsubsection{\texttt{\_\_kmpc\_copyprivate}}
 
 \paragraph{Description} This function is used to implement the \texttt{copyprivate} clause
-associated with a single section. It is called by every thread that participates in the parallel
-section after the single section is executed and it is responsible for broadcasting the private data
-of the thread executing the single section to the other threads.
+associated with a \texttt{single} section. It is called by every thread that participates in the
+\texttt{parallel} section after the \texttt{single} section is executed and it is responsible for
+broadcasting the private data of the thread that executed it to the other threads.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -388,8 +389,9 @@ void __kmpc_copyprivate(ident_t *loc, kmp_int32 gtid, size_t cpy_size,
 
 \subsubsection{\texttt{__kmpc_reduce and __kmpc_reduce_nowait}}
 
-\paragraph{Description} These functions are used to implement the reduction clause. The former
-performs a barrier after the reduction, while the latter does not.
+\paragraph{Description} These functions are used to implement the reduction clause. The
+\texttt{nowait} version is called when the \texttt{nowait} clause is present in the reduction
+directive and indicates that no barrier should be executed after the reduction.
 
 \paragraph{Arguments}
 \begin{itemize}
@@ -402,7 +404,7 @@ performs a barrier after the reduction, while the latter does not.
 	\item \texttt{reduce\_func}: Pointer to the function that performs the reduction on a pair of
 	      elements. The result is made available at the location pointed to by the first argument
 	      after calling it.
-	\item \texttt{lck}: Pointer to a region of memory associated with the critical section used for
+	\item \texttt{lck}: Pointer to a region of memory associated with the \texttt{critical} section used for
 	      the reduction. 8 $\times$ 32 bits are made available by the compiler at the location pointed
 	      to by this argument.
 \end{itemize}
@@ -440,17 +442,17 @@ kmp_int32 __kmpc_reduce(ident_t *loc, kmp_int32 global_tid,
 \subsubsection{\texttt{__kmpc_end_reduce and __kmpc_end_reduce_nowait}}
 \label{subsubsec:kmpc-end-reduce}
 
-\paragraph{Description} These functions are called after the reduction is done. The former performs
-a barrier, while the latter does not.
+\paragraph{Description} These functions are called after the reduction is done. The first one
+performs a barrier, while the second one does not.
 
 \paragraph{Arguments}
 \begin{itemize}
 	\item \texttt{loc}: Pointer to a struct containing information about the source code location
 	      of the call.
 	\item \texttt{global_tid}: Global ID of the calling thread.
-	\item \texttt{lck}: Pointer to a region of memory associated with the critical section used for
-	      the reduction. 8 $\times$ 32 bits are made available by the compiler at the location pointed
-	      to by this argument.
+	\item \texttt{lck}: Pointer to a region of memory associated with the \texttt{critical} section
+	      used for the reduction. 8 $\times$ 32 bits are made available by the compiler at the
+	      location pointed to by this argument.
 \end{itemize}
 
 \paragraph{Implementation} \texttt{\_\_kmpc\_end\_reduce\_nowait} does nothing\footnote{Because the
@@ -547,7 +549,7 @@ void __kmpc_push_num_teams(ident_t *loc, kmp_int32 global_tid,
 \begin{itemize}
 	\item \texttt{loc}: Pointer to a struct containing information about the source code location
 	      of the call.
-      \item \texttt{global\_tid}: Global ID of the calling thread.
+	\item \texttt{global\_tid}: Global ID of the calling thread.
 \end{itemize}
 
 \paragraph{Implementation} This function obtains the barrier object associated with the current team
