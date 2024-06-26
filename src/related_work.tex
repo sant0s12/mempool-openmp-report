@@ -12,7 +12,7 @@ following, we will briefly discuss its architecture and implementation.
 
 Because the entry point of the application is the same for all cores, it is necessary to distinguish
 between master and worker cores at runtime. Therefore, every application intended to use the
-\gls{gcc} OpenMP runtime has to include the code shown on \cref{lst:event_loop} in its main file.
+\gls{gcc} OpenMP runtime has to include the code shown in \cref{lst:event-loop} in its main file.
 Essentially, it distinguishes between two cases:
 
 \begin{enumerate}
@@ -24,7 +24,7 @@ Essentially, it distinguishes between two cases:
 	      master core when it encounters OpenMP constructs that require it.
 \end{enumerate}
 
-\begin{lstlisting}[language=C, caption={Main Event Loop}, label={lst:event_loop}]
+\begin{lstlisting}[language=C, caption={Main Event Loop}, label={lst:event-loop}]
 uint32_t core_id = mempool_get_core_id();
 
 if (core_id == 0) {
