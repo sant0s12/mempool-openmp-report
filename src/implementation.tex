@@ -92,6 +92,7 @@ as everything surrounding C++ support, and the main function wrapper. In the fol
 will describe the latter two.
 
 \subsection{C++ Support}
+\label{subsec:cpp-support}
 
 \subsubsection{Heap Allocation}
 
@@ -100,8 +101,8 @@ In order to support heap allocation in C++, we implement the global \texttt{oper
 allocator\footnote{\url{https://en.cppreference.com/w/cpp/memory/allocator}}. They are essentially
 wrappers around the \texttt{simple\_malloc} and \texttt{simple\_free} functions provided by the
 MemPool runtime library. Additionally, they use a globally defined mutex \texttt{allocLock} to make
-sure that only one thread uses the allocator at the same time, since neither \texttt{simple\_malloc}
-nor \texttt{simple\_free} are thread-safe.
+sure that only one thread uses the allocator at any given time, since neither
+\texttt{simple\_malloc} nor \texttt{simple\_free} are thread-safe.
 
 \begin{lstlisting}[language=C, caption={Heap Allocation Functions},
 	label={lst:heap-allocation}, escapechar=@, literate={~} {$\sim$}{1}]
@@ -148,8 +149,8 @@ And linked with the following linker flags:
 Global C++ objects need to be initialized at runtime. Usually, this would be done by the startup
 files that the program is liked to by default, however, they are disabled when using the
 \texttt{-nostdlib} flag. This is why we need to implement this initialization ourselves. The
-compiler generates an array of initialization functions~\cite{crt-startup} in the
-\texttt{.init\_array} section of the \gls{elf} file, each of which should be called before the main
+compiler generates an array of initialization functions~\cite{crt-startup} that are placed in the
+\texttt{.init\_array} section of the \gls{elf} file, each of which must be called before the main
 function. This is done by the \texttt{initGlobals} function (\cref{lst:init-globals}), in
 conjunction with the additions to the linker script shown in \cref{lst:init-array-linker}.
 

@@ -4,26 +4,18 @@
 \section{MemPool}
 \label{sec:mempool}
 
-As demand for processing of highly parallel workloads grow over time, computing architectures
-with increasing core/processing element counts become more common. These can range all the way
-from custom accelerators with domain-specific architectures and programming models, to
-general-purpose multi-core processors. There is generally a trade-off between ease of programming
-and performance/efficiency.
-
-One can achieve an interesting middle ground by grouping many relatively simple general purpose
-cores into a so called \emph{compute cluster}. In practice, however, this approach does not scale
-well beyond a few tens of cores, which lead to the development of \emph{multi-cluster} architectures
-comprised of many of such clusters. While this allows for greater core counts, it also introduces
-additional complexity and memory access overhead between each cluster.
-
-MemPool~\cite{mempool} tries to address this issue by scaling a single cluster to the order of
-hundreds of cores that share a low-latency software managed L1 cache.
+\begin{figure}[t]
+	\centering
+	\includegraphics[width=\textwidth]{./fig/mempool.pdf}
+	\caption{MemPool's Architecture Hierarchy}%
+	\label{fig:mempool}
+\end{figure}
 
 \subsection{Architecture Overview}
 \label{subsec:mempool_architecture}
 
-At the heart of MemPool is the \emph{Snitch} core, which is a simple, in-order, 32-bit RISC-V core.
-This core was adapted for this architecture by adding the ability to retire out-of-order load
+At the heart of MemPool lies the \emph{Snitch} core, which is a simple, in-order, 32-bit RISC-V
+core. This core was adapted for this architecture by adding the ability to retire out-of-order load
 instructions, which, in addition to its previously existing support for issuing multiple outstanding
 loads and stores through scoreboarding, allows MemPool to completely hide the L1 access latency.
 
@@ -31,8 +23,10 @@ MemPool's architecture is hierarchical and comprised of the following building b
 
 \paragraph{Tile} A tile is made up of a number of cores, some shared L1 banks, an L1 instruction
 cache shared amongst the tile's cores, as well as a set of remote ports to send/receive requests
-to/from other tiles trying to access the global L1 cache. Finally, it also has an \gls{axi} port
-connected to the system bus, which allows the tile to access the global L2 cache or system memory.
+to/from other tiles trying to access the global L1 cache. Although any region of the L1 cache is
+accessible by any tile, obtaining data from remote tiles is more costly than reading/writing it
+directly from/to the local banks. Finally, it also has an \gls{axi} port connected to the system
+bus, which allows the tile to access the global L2 cache or system memory.
 
 \paragraph{Group} A group is made up of multiple tiles. Each tile's remote ports are connected with
 each other both within the same group as well as with other groups through a series of
@@ -41,7 +35,6 @@ interconnects. Each tile's \gls{axi} port is connected to the rest of the system
 
 \paragraph{Cluster} Finally, a cluster is made up of multiple groups. Here, an \gls{axi} interface
 is used to connect MemPool to the rest of the system (e.g., L2 cache, system memory, etc.).
-\\
 
 Another interesting aspect of MemPool's architecture is the \emph{hybrid memory addressing scheme}.
 MemPool's shared L1 memory is interleaved at the word level across all banks. This means that
@@ -50,6 +43,18 @@ tiles. This is not an issue for data shared across all cores, however, it is nee
 local data (e.g., the stack). For this reason, MemPool is able to dedicate \emph{sequential regions}
 of memory that are interleaved only within the same tile by re-interpreting the memory address,
 which is entirely done in hardware.
+
+\subsection{Programming Model}
+
+MemPool aims to provide a conceptually simple and familiar programming model to ease the development
+of parallel applications. It is based on the following principles:
+
+\begin{enumerate}
+	\item Shared memory: MemPool provides a shared memory programming model, which means that all
+	      cores have access to the full shared memory space.
+	\item Independently programmable cores: Each core is individually programmable, which means that
+	      each core can execute different code at the same time unlike on GPUs or SIMD architectures.
+\end{enumerate}
 
 \section{OpenMP}
 \label{sec:openmp}

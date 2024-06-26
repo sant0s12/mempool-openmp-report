@@ -1,7 +1,20 @@
 \chapter{Introduction} \label{ch:introduction}
 
-MemPool~\cite{mempool} is an open-source manycore architecture developed at ETH. It is comprised of
-up to 1024~\cite{terapool} 32-bit RISC-V Snitch~\cite{snitch} cores that share a common L1 cache.
+As demand for processing of highly parallel workloads grows over time, computing architectures with
+increasing core/processing element counts become more common. These can range all the way from
+custom accelerators with domain-specific architectures and programming models, to general-purpose
+multi-core processors. There is generally a trade-off between ease of programming and
+performance/efficiency.
+
+One can achieve an interesting middle ground by grouping many relatively simple general purpose
+cores into a so called \emph{compute cluster}. In practice, however, this approach does not scale
+well beyond a few tens of cores, which lead to the development of \emph{multi-cluster} architectures
+comprised of many of such clusters. While this allows for greater core counts, it also introduces
+additional complexity and memory access overhead between each of them.
+
+MemPool~\cite{mempool} tries to address this issue by scaling a single cluster to the order of
+hundreds of cores. It is an open-source manycore architecture developed at ETH, which is comprised
+of up to 1024~\cite{terapool} 32-bit RISC-V Snitch~\cite{snitch} cores that share a common L1 cache.
 Unlike on GPUs, each core is individually programmable, therefore enabling the familiar shared
 memory programming model.
 
@@ -10,7 +23,7 @@ provided by MemPool's C runtime library, this can become a tedious and error pro
 programmer has to be knowledgeable about the underlying architecture. Luckily, higher level
 abstraction layers such as OpenMP~\cite{openmp} allow the programmer to express this parallelism in
 a clear and concise way using the fork-join paradigm and without needing advanced architectural
-knowledge.
+knowledge. This is what makes OpenMP portable cross architectures and therefore widely used.
 
 OpenMP is comprised of a set of compiler directives for both C/C++ and Fortran that enable this
 higher level abstraction. In order to use OpenMP, one has to use a compatible compiler that is able
@@ -26,27 +39,35 @@ to roughly do the following:
 Both the \gls{gcc} and LLVM provide an OpenMP runtime library interface that bridges the gap between
 both points: instead of directly generating a binary from OpenMP annotated code, the compiler
 generates calls to the OpenMP runtime library. This library has to be aware of how to parallelize
-the code given the platform, which makes it inherently non-portable. Naturally, popular compilers
-ship with their own OpenMP runtime library implementation, however, in order to get around the
-non-portability issue, they target a host running an operating system which is able to provide the
-necessary parallelism primitives. Since MemPool is designed to run bare-metal applications, this
-means that a custom OpenMP runtime library has to be developed.
+the code given the platform, which makes it generally non-portable, unless it can use parallelism
+primitives provided by an \gls{os} or a \gls{hal}. Naturally, popular compilers ship with their own
+OpenMP runtime library implementation, however, they target a host running an operating system which
+is able to provide the necessary parallelism primitives. Since MemPool is designed to run bare-metal
+applications, this means that a custom OpenMP runtime library has to be developed.
 
 Previously, the authors of MemPool developed a \gls{gcc} compatible OpenMP runtime library with
 support for the most commonly used OpenMP constructs, such as \emph{work sharing}, \emph{critical
-sections} and \emph{atomics}.\footnote{This implementation will be discussed in more detail in
-\cref{sec:gcc_implementation}.} However, as the MemPool team increasingly relies on the LLVM
-compiler infrastructure, it is essential to have a compatible OpenMP runtime library for LLVM as
-well.
+	sections} and \emph{atomics}. This implementation will be discussed in more detail in
+\cref{sec:gcc_implementation}. However, due to the growing popularity of the LLVM compiler
+infrastructure in research because of its modularity and ease of use, it is essential to have a
+compatible OpenMP runtime library for LLVM as well.
 
 The goal of this project is to implement an OpenMP runtime for LLVM that works on MemPool, supports
 at least the same set of features as the previous \gls{gcc} runtime and achieves comparable
 performance.
 
-The runtime will be implemented in C++ as detailed in \cref{ch:implementation}. In
-\cref{ch:results}, the new runtime will be evaluated in terms of performance and correctness against
-the \gls{gcc} runtime. Finally, we will summarize the results and discuss possible shortcomings and
-future work in \cref{ch:conclusion}.
+In this work, we present the following contributions:
+
+\begin{itemize}
+	\item A C++ implementation of an OpenMP runtime library compatible with LLVM that achieves
+	      feature parity with the previous \gls{gcc} runtime and adds support for \texttt{teams}
+	      constructs (\cref{ch:implementation}).
+	\item An evaluation of the new runtime in terms of performance and correctness against the
+	      \gls{gcc} runtime (\cref{ch:results}).
+	\item A small testing framework for running and evaluating runtime tests automatically
+	      (\cref{subsec:testing-framework}).
+	\item C++ support for MemPool (\cref{subsec:cpp-support}).
+\end{itemize}
 
 % The introduction motivates your work and puts it into a bigger context. It should answer the
 % following questions: What is the background of this work? What is the state of the art? Why is
