@@ -223,7 +223,7 @@ int __kmpc_dispatch_next_4(ident_t *loc, kmp_int32 gtid,
 }
 \end{lstlisting}
 
-\subsection{\texttt{critical} sections}
+\subsection{Critical sections}
 
 \subsubsection{\texttt{__kmpc_critical and __kmpc_end_critical}}
 
@@ -694,11 +694,13 @@ kmp_int32 __kmpc_global_thread_num(ident_t *loc) {
 
 	      If \texttt{currentTeam} is not \texttt{null} and \texttt{teamsRegion} is empty, meaning
 	      that the calling thread is a worker thread, the thread executes the implicit task of the
-	      team (\cref{subsec:team}), resets the \texttt{currentTeam} pointer, and executes the team's
-	      barrier associated with the end of the \texttt{parallel} region. The team pointer has to
-	      be reset before executing the barrier to avoid the case where a new team is assigned to
-	      the thread after the barrier but before resetting the pointer, which would cause the
-	      thread to miss the assignment to the new team.
+	      team (\cref{subsec:team}), resets the \texttt{currentTeam} pointer, sets its \texttt{tid}
+	      to match its \texttt{gtid}, and executes the team's barrier associated with the end of the
+	      \texttt{parallel} region. The \texttt{tid} is reset in this way to speed up the forking
+	      process when launching only one team later, since then every thread's \texttt{tid} matches
+	      its \texttt{gtid}. The team pointer has to be reset before executing the barrier to avoid
+	      the case where a new team is assigned to the thread after the barrier but before resetting
+	      the pointer, which would cause the thread to miss the assignment to the new team.
 
 	      If \texttt{teamsRegion} has a value, that means that the current thread is the master
 	      thread of a team and therefore has to execute the body of the \texttt{teams} construct.
@@ -715,10 +717,11 @@ kmp_int32 __kmpc_global_thread_num(ident_t *loc) {
 
                 if (currentTeam != nullptr && !teamsRegion.has_value()) {
 
-                  (*currentTeam).getImplicitTask()->run(gtid, tid);
+                  (*currentTeam).getImplicitTask().run(gtid, tid);
 
                   Team *prevTeam = currentTeam;
                   currentTeam = nullptr;
+                  tid = gtid;
 
                   (*prevTeam).getBarrier().wait();
 
@@ -729,6 +732,7 @@ kmp_int32 __kmpc_global_thread_num(ident_t *loc) {
 
                   delete currentTeam;
                   currentTeam = nullptr;
+                  tid = gtid;
 
                   runtime::teamsBarrier.wait();
                 }
@@ -767,8 +771,8 @@ kmp_int32 __kmpc_global_thread_num(ident_t *loc) {
     \end{lstlisting}
 
 	\item \texttt{void Thread::forkTeams(Task teamsRegion)}: \label{subsec:thread-forkteams} This
-          function is called by the thread with global ID 0 when it encounters a \texttt{teams}
-          construct.
+	      function is called by the thread with global ID 0 when it encounters a \texttt{teams}
+	      construct.
 
 	      First, it checks if a specific number of teams was requested and uses the number of groups
 	      (\cref{subsec:mempool_architecture}) as the default if not. This hints at the possibility
@@ -857,23 +861,42 @@ kmp_int32 __kmpc_global_thread_num(ident_t *loc) {
 
 \begin{itemize}
 	\item \texttt{void Team::run()}: This function is used to launch the team and is called by the
-	      master thread. It iterates sequentially over the threads with a global ID in the range
-	      $[\texttt{masterGtid},\: \texttt{masterGtid} + \texttt{numThreads} - 1]$, sets their team
-	      local thread ID, and, if they are not the master thread, sets the team pointer and wakes them
-	      up.
+	      master thread. It distinguishes between two cases:
+
+	      \begin{enumerate}
+              \item If there are multiple teams, it iterates sequentially over the threads with a
+                    global ID in the range $[\texttt{masterGtid},\: \texttt{masterGtid} +
+                    \texttt{numThreads} - 1]$, sets their team local thread ID, and, if they are not the
+		            master thread, sets the team pointer and wakes them up.
+		      \item If there is only one team, it iterates over all threads in the team in the same
+                    way and sets their team pointer. Unlike in the previous case, now all threads
+                    can be woken up at once using \texttt{wake\_up\_all}, which is slightly more efficient.
+	      \end{enumerate}
+
 
 	      \begin{lstlisting}[language=C, caption={void Team::run},
           label={lst:team-run}, escapechar=@]
             inline void run() {
-              for (kmp_int32 i = masterGtid; i < masterGtid + numThreads;
-                    i++) {
-                auto &thread = runtime::getThread(i);
-                thread.setTid(i - masterGtid);
+              if (runtime::numTeams > 1) {
+                for (kmp_int32 i = masterGtid + 1;
+                      i < masterGtid + numThreads; i++) {
+                  auto &thread = runtime::getThread(i);
+                  thread.setTid(i - masterGtid);
 
-                if (i != masterGtid) {
-                  thread.setCurrentTeam(this);
-                  thread.wakeUp();
+                  if (i != masterGtid) {
+                    thread.setCurrentTeam(this);
+                    thread.wakeUp();
+                  }
                 }
+              } else {
+                for (kmp_int32 i = masterGtid + 1;
+                      i < masterGtid + numThreads; i++) {
+                  auto &thread = runtime::getThread(i);
+                  thread.setCurrentTeam(this);
+                }
+
+                wake_up_all();
+                mempool_wfi();
               }
             }
           \end{lstlisting}
